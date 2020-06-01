@@ -696,8 +696,6 @@ abstract class Model implements Arrayable, ArrayAccess, Jsonable, JsonSerializab
      */
     public function save(array $options = [])
     {
-        $this->mergeAttributesFromClassCasts();
-
         $query = $this->newModelQuery();
 
         // If the "saving" event returns false we'll bail out of the save and return
@@ -711,8 +709,7 @@ abstract class Model implements Arrayable, ArrayAccess, Jsonable, JsonSerializab
         // that is already in this database using the current IDs in this "where"
         // clause to only update this model. Otherwise, we'll just insert them.
         if ($this->exists) {
-            $saved = $this->isDirty() ?
-                        $this->performUpdate($query) : true;
+            $saved = $this->performUpdate($query);
         }
 
         // If the model is brand new, we'll insert it into our database and set the
@@ -762,11 +759,13 @@ abstract class Model implements Arrayable, ArrayAccess, Jsonable, JsonSerializab
     {
         $this->fireModelEvent('saved', false);
 
-        if ($this->isDirty() && ($options['touch'] ?? true)) {
+        $wasChanged = ($this->wasRecentlyCreated && empty($this->original)) || $this->changes;
+
+        if ($wasChanged && ($options['touch'] ?? true)) {
             $this->touchOwners();
         }
 
-        $this->syncOriginal();
+        $this->original = $this->attributes;
     }
 
     /**
@@ -777,29 +776,29 @@ abstract class Model implements Arrayable, ArrayAccess, Jsonable, JsonSerializab
      */
     protected function performUpdate(Builder $query)
     {
-        // If the updating event returns false, we will cancel the update operation so
-        // developers can hook Validation systems into their models and cancel this
-        // operation if the model does not pass validation. Otherwise, we update.
-        if ($this->fireModelEvent('updating') === false) {
-            return false;
-        }
-
-        // First we need to create a fresh query instance and touch the creation and
-        // update timestamp on the model which are maintained by us for developer
-        // convenience. Then we will just continue saving the model instances.
-        if ($this->usesTimestamps()) {
-            $this->updateTimestamps();
-        }
-
         // Once we have run the update operation, we will fire the "updated" event for
         // this model instance. This will allow developers to hook into these after
         // models are updated, giving them a chance to do any special processing.
-        $dirty = $this->getDirty();
+        $changes = $this->getDirty();
 
-        if (count($dirty) > 0) {
-            $this->setKeysForSaveQuery($query)->update($dirty);
+        if ($changes) {
+            // If the updating event returns false, we will cancel the update operation so
+            // developers can hook Validation systems into their models and cancel this
+            // operation if the model does not pass validation. Otherwise, we update.
+            if ($this->fireModelEvent('updating') === false) {
+                return false;
+            }
 
-            $this->syncChanges();
+            // First we need to create a fresh query instance and touch the creation and
+            // update timestamp on the model which are maintained by us for developer
+            // convenience. Then we will just continue saving the model instances.
+            if ($this->usesTimestamps()) {
+                $this->updateTimestamps();
+            }
+
+            $this->setKeysForSaveQuery($query)->update($changes);
+
+            $this->changes = $changes;
 
             $this->fireModelEvent('updated', false);
         }

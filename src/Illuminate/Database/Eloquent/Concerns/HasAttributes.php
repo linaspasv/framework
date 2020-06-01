@@ -358,6 +358,10 @@ trait HasAttributes
             return;
         }
 
+        if (isset($this->classCastCache[$key])) {
+            return $this->classCastCache[$key];
+        }
+
         // If the attribute exists in the attribute array or has a "get" mutator we will
         // get the attribute's value. Otherwise, we will proceed as if the developers
         // are asking for a relationship's value. This covers both types of values.
@@ -397,7 +401,9 @@ trait HasAttributes
      */
     protected function getAttributeFromArray($key)
     {
-        return $this->getAttributes()[$key] ?? null;
+        $this->mergeAttributeFromClassCasts($key);
+
+        return $this->attributes[$key] ?? null;
     }
 
     /**
@@ -1128,6 +1134,30 @@ trait HasAttributes
     }
 
     /**
+     * Merge a single cast class attribute back into the model.
+     *
+     * @param  string  $key
+     * @return void
+     */
+    protected function mergeAttributeFromClassCasts($key)
+    {
+        if (! isset($this->classCastCache[$key])) {
+            return;
+        }
+
+        $value = $this->classCastCache[$key];
+
+        $caster = $this->resolveCasterClass($key);
+
+        $this->attributes = array_merge(
+            $this->attributes,
+            $caster instanceof CastsInboundAttributes
+                ? [$key => $value]
+                : $this->normalizeCastClassResponse($key, $caster->set($this, $key, $value, $this->attributes))
+        );
+    }
+
+    /**
      * Merge the cast class attributes back into the model.
      *
      * @return void
@@ -1135,14 +1165,7 @@ trait HasAttributes
     protected function mergeAttributesFromClassCasts()
     {
         foreach ($this->classCastCache as $key => $value) {
-            $caster = $this->resolveCasterClass($key);
-
-            $this->attributes = array_merge(
-                $this->attributes,
-                $caster instanceof CastsInboundAttributes
-                       ? [$key => $value]
-                       : $this->normalizeCastClassResponse($key, $caster->set($this, $key, $value, $this->attributes))
-            );
+            $this->mergeAttributeFromClassCasts($key);
         }
     }
 
@@ -1272,10 +1295,8 @@ trait HasAttributes
     {
         $attributes = is_array($attributes) ? $attributes : func_get_args();
 
-        $modelAttributes = $this->getAttributes();
-
         foreach ($attributes as $attribute) {
-            $this->original[$attribute] = $modelAttributes[$attribute];
+            $this->original[$attribute] = $this->getAttributeFromArray($attribute);
         }
 
         return $this;
@@ -1301,9 +1322,21 @@ trait HasAttributes
      */
     public function isDirty($attributes = null)
     {
-        return $this->hasChanges(
-            $this->getDirty(), is_array($attributes) ? $attributes : func_get_args()
-        );
+        $attributes = is_array($attributes) ? $attributes : func_get_args();
+
+        foreach ($attributes ?: array_keys($this->attributes) as $key) {
+            if (! array_key_exists($key, $this->attributes)) {
+                continue;
+            }
+
+            $this->mergeAttributeFromClassCasts($key);
+
+            if (! $this->originalIsEquivalent($key)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
