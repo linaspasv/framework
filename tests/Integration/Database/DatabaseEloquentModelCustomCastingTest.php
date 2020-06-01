@@ -7,7 +7,9 @@ use Illuminate\Contracts\Database\Eloquent\CastsAttributes;
 use Illuminate\Contracts\Database\Eloquent\CastsInboundAttributes;
 use Illuminate\Database\Eloquent\InvalidCastException;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Schema;
 
 /**
  * @group integration
@@ -173,6 +175,25 @@ class DatabaseEloquentModelCustomCastingTest extends DatabaseTestCase
 
         $model->undefined_cast_column = 'Glāžšķūņu rūķīši';
     }
+
+    public function testCastingIsNotExcessive()
+    {
+        Schema::create('places', function (Blueprint $table) {
+            $table->increments('id');
+            $table->string('coordinates');
+            $table->timestamps();
+        });
+
+        $place = new TestEloquentPlaceModelWithCustomCast;
+        $place->coordinates->x = 1;
+        $place->coordinates->y = 2;
+
+        $this->assertEquals(0, PointCaster::$setCount);
+        $place->save();
+
+        $this->assertDatabaseHas('places', ['id' => 1, 'coordinates' => '{"x":1,"y":2}']);
+        $this->assertEquals(1, PointCaster::$setCount);
+    }
 }
 
 class TestEloquentModelWithCustomCast extends Model
@@ -200,6 +221,20 @@ class TestEloquentModelWithCustomCast extends Model
         'value_object_caster_with_caster_instance' => ValueObjectWithCasterInstance::class,
         'undefined_cast_column' => UndefinedCast::class,
         'birthday_at' => DateObjectCaster::class,
+    ];
+}
+
+class TestEloquentPlaceModelWithCustomCast extends Model
+{
+    protected $table = 'places';
+
+    /**
+     * The attributes that should be cast to native types.
+     *
+     * @var array
+     */
+    protected $casts = [
+        'coordinates' => PointCaster::class,
     ];
 }
 
@@ -352,5 +387,41 @@ class DateObjectCaster implements CastsAttributes
     public function set($model, $key, $value, $attributes)
     {
         return $value->format('Y-m-d');
+    }
+}
+
+class PointCaster implements CastsAttributes
+{
+    static $setCount = 0;
+
+    public function get($model, $key, $value, $attributes)
+    {
+        $vo = new Point();
+        $vo->setFromSerialization($value);
+
+        return $vo;
+    }
+
+    public function set($model, $key, $value, $attributes)
+    {
+        static::$setCount++;
+
+        return [$key => $value->toSerialization()];
+    }
+}
+
+class Point
+{
+    public $x;
+    public $y;
+
+    public function setFromSerialization($value)
+    {
+        [$this->x, $this->y] = json_decode($value);
+    }
+
+    public function toSerialization()
+    {
+        return json_encode(['x' => $this->x, 'y' => $this->y]);
     }
 }
